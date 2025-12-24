@@ -2,21 +2,21 @@
 
 A production-grade privacy-preserving Ethereum JSON-RPC gateway using the Penum protocol.
 
-## 🎯 Overview
+## Overview
 
 Penum Private RPC prevents blockchain RPC providers from learning:
 
-- ✅ Client IP address
-- ✅ Geographic location
-- ✅ Direct wallet → network linkage
+- Client IP address
+- Geographic location
+- Direct wallet to network linkage
 
 All traffic is routed through the Penum protocol's encrypted onion network using fixed-size packets.
 
-## 🏗️ Architecture
+## Architecture
 
 ```
 MetaMask → penum-rpc-client → penum-rpc-gateway → RPC Provider
-            (localhost:8545)     (encrypted packets)    (Alchemy/Infura)
+           (localhost:8545)     (encrypted packets)    (Alchemy/Infura)
 ```
 
 ### Components
@@ -32,7 +32,7 @@ MetaMask → penum-rpc-client → penum-rpc-gateway → RPC Provider
    - Forwards JSON-RPC to real provider (Alchemy, Infura, etc.)
    - Re-encrypts responses
 
-## 🚀 Quick Start
+## Quick Start
 
 ### 1. Start the Gateway
 
@@ -62,7 +62,7 @@ cargo run --release
 
 Open `http://127.0.0.1:8546` to see the Penum RPC dashboard.
 
-## ⚙️ Configuration
+## Configuration
 
 ### Gateway Configuration
 
@@ -94,32 +94,32 @@ Edit `penum-rpc-client/config.example.json`:
 
 For testing, the client connects directly to the gateway (simplified single-hop).
 
-## 🔒 Privacy Guarantees
+## Privacy Guarantees
 
 ### What Penum RPC Prevents
 
-- ❌ RPC provider **cannot** see your IP address
-- ❌ RPC provider **cannot** link requests to your wallet
-- ❌ Relays **cannot** correlate traffic patterns
-- ❌ Network observers **cannot** perform traffic analysis (fixed packet sizes)
+- RPC provider cannot see your IP address
+- RPC provider cannot link requests to your wallet
+- Relays cannot correlate traffic patterns
+- Network observers cannot perform traffic analysis (fixed packet sizes)
 
 ### What Penum RPC Does NOT Prevent
 
-- ⚠️ On-chain analysis (all transactions are public on Ethereum)
-- ⚠️ End-to-end timing attacks (advanced adversaries)
-- ⚠️ Wallet fingerprinting via transaction patterns
+- On-chain analysis (all transactions are public on Ethereum)
+- End-to-end timing attacks (advanced adversaries)
+- Wallet fingerprinting via transaction patterns
 
-## 📡 Supported JSON-RPC Methods
+## Supported JSON-RPC Methods
 
-- ✅ `eth_call`
-- ✅ `eth_getBalance`
-- ✅ `eth_blockNumber`
-- ✅ `eth_sendRawTransaction`
-- ✅ `eth_getTransactionReceipt`
+- `eth_call`
+- `eth_getBalance`
+- `eth_blockNumber`
+- `eth_sendRawTransaction`
+- `eth_getTransactionReceipt`
 
 More methods can be added by updating `rpc_server.rs`.
 
-## 🔐 Security Features
+## Security Features
 
 ### Fixed-Size Packets
 
@@ -140,7 +140,7 @@ New X25519 keypair generated for **every connection**. Keys are never reused.
 
 On any error, connections close silently with no error details sent back.
 
-## 🧪 Testing
+## Testing
 
 ### Test with curl
 
@@ -163,13 +163,13 @@ curl -X POST http://127.0.0.1:8545 \
 3. Verify transaction confirms on Etherscan
 4. Check RPC provider logs - your IP should NOT appear
 
-## 📊 Performance
+## Performance
 
 - **Latency Overhead**: ~50-150ms (single-hop testing)
 - **Throughput**: Limited by encryption overhead (~1000 req/s)
 - **Packet Size**: All packets exactly 1024 bytes
 
-## 🛠️ Development
+## Development
 
 ### Build
 
@@ -184,28 +184,29 @@ cargo build --release
 cargo test
 ```
 
-## 📚 Documentation
+## Documentation
 
 - [Architecture Details](docs/architecture.md)
 - [MetaMask Setup Guide](docs/metamask-setup.md)
 - [Security Verification](docs/verification.md)
+- [Scaling and Deployment Guide](docs/scaling-deployment.md)
 
-## ⚠️ Limitations
+## Limitations
 
 - **Not Full Anonymity**: Penum provides privacy, not anonymity. Advanced adversaries may correlate traffic.
 - **Latency**: Adds ~100-300ms overhead per request
 - **Beta Software**: Not audited, use at your own risk
 - **Single-Hop Simplified**: Current implementation uses direct client→gateway connection for testing
 
-## 🤝 Contributing
+## Contributing
 
 This is a research prototype. Contributions welcome!
 
-## 📄 License
+## License
 
 MIT License - See LICENSE file for details
 
-## 🔗 Related Projects
+## Related Projects
 
 - [Penum Protocol](../penum-spec/) - Core protocol specification
 - [Penum Client](../penum-client/) - General-purpose Penum client
@@ -213,4 +214,4 @@ MIT License - See LICENSE file for details
 
 ---
 
-**⚠️ DISCLAIMER**: This software is experimental. Do not use for production workloads without thorough security review.
+**DISCLAIMER**: This software is experimental. Do not use for production workloads without thorough security review.
