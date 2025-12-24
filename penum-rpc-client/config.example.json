@@ -1,0 +1,8 @@
+{
+  "entry_relay": "127.0.0.1:9001",
+  "middle_relay": "127.0.0.1:9002",
+  "gateway": "127.0.0.1:9003",
+  "rpc_port": 8545,
+  "ui_port": 8546,
+  "protocol_version": 1
+}
