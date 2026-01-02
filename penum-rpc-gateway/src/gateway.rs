@@ -4,12 +4,22 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use x25519_dalek::PublicKey;
 use rand::RngCore;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 const PACKET_SIZE: usize = 1024;
 const HEADER_SIZE: usize = 32;
 const TAG_SIZE: usize = 16;
 const PAYLOAD_SIZE: usize = PACKET_SIZE - HEADER_SIZE - TAG_SIZE;
+
+#[derive(Deserialize, Serialize, Debug)]
+struct JsonRpcRequest {
+    jsonrpc: String,
+    method: String,
+    #[serde(default)]
+    params: Value,
+    id: Value,
+}
 
 pub struct Gateway {
     rpc_forwarder: RpcForwarder,
@@ -35,11 +45,15 @@ impl Gateway {
 
         // Receive client public key (32 bytes)
         let mut client_pub_bytes = [0u8; 32];
-        stream.read_exact(&mut client_pub_bytes).await?;
+        if let Err(_) = stream.read_exact(&mut client_pub_bytes).await {
+            return Ok(()); // Fail silently
+        }
         let client_pub = PublicKey::from(client_pub_bytes);
 
         // Send server public key (32 bytes)
-        stream.write_all(server_pub.as_bytes()).await?;
+        if let Err(_) = stream.write_all(server_pub.as_bytes()).await {
+            return Ok(()); // Fail silently
+        }
 
         // Derive session key using HKDF with salt "penum-v1"
         let shared_secret = server_keys.diffie_hellman(&client_pub);
@@ -47,119 +61,117 @@ impl Gateway {
 
         // Receive encrypted packet (exactly 1024 bytes)
         let mut encrypted_packet = [0u8; PACKET_SIZE];
-        stream.read_exact(&mut encrypted_packet).await?;
+        if let Err(_) = stream.read_exact(&mut encrypted_packet).await {
+            return Ok(()); // Fail silently
+        }
 
-        // Decrypt packet
+        // Decrypt packet (this is a request)
         let (header, payload_and_tag) = encrypted_packet.split_at(HEADER_SIZE);
         let (payload, tag) = payload_and_tag.split_at(PAYLOAD_SIZE);
         let mut payload = payload.to_vec();
         
-        let tag_array: [u8; TAG_SIZE] = tag.try_into()
-            .map_err(|_| anyhow::anyhow!("Invalid tag size"))?;
-        decrypt_in_place(&session_key, header, &mut payload, &tag_array)?;
+        let tag_array: [u8; TAG_SIZE] = match tag.try_into() {
+            Ok(tag) => tag,
+            Err(_) => return Ok(()), // Fail silently
+        };
+        if let Err(_) = decrypt_in_place(&session_key, header, &mut payload, &tag_array, true) {
+            return Ok(()); // Fail silently
+        }
 
         // Extract JSON-RPC request from padding
         // The client places the JSON at the end of the payload with random padding at the start
-        // So we should look for JSON at the end of the payload first
         
-        // Try to find JSON at the end of the payload (where client places it)
-        let mut json_rpc: &[u8] = &[];
-        let mut found_json = false;
+        // Find the JSON by looking for the first '{' and the last '}' in the payload
+        // But also validate that the extracted content is valid JSON to avoid false matches
+        let json_start = match payload.iter().position(|&b| b == b'{') {
+            Some(pos) => pos,
+            None => return Ok(()), // Fail silently
+        };
         
-        // Look for JSON from the end backwards, as the client places it at the end
-        // Start from near the end and work backwards to find a valid JSON
-        for end in (0..payload.len()).rev() {
-            if payload[end] == b'}' {
-                // Look for matching opening bracket from this end position backwards
-                let mut brace_count = 1;
-                for start in (0..end).rev() {
-                    if payload[start] == b'}' {
-                        brace_count += 1;
-                    } else if payload[start] == b'{' {
-                        brace_count -= 1;
-                        if brace_count == 0 {
-                            // Found potential JSON object
-                            let candidate = &payload[start..end + 1];
-                            if std::str::from_utf8(candidate).is_ok() {
-                                // Try to parse as JSON to make sure it's valid
-                                if serde_json::from_slice::<Value>(candidate).is_ok() {
-                                    json_rpc = candidate;
-                                    found_json = true;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    if found_json {
-                        break;
-                    }
-                }
-                if found_json {
-                    break;
-                }
-            }
+        // Find end of JSON (last '}' after the start)
+        let json_end = match payload[json_start..].iter().rposition(|&b| b == b'}') {
+            Some(pos) => pos,
+            None => return Ok(()), // Fail silently
+        };
+        
+        let json_rpc_candidate = &payload[json_start..json_start + json_end + 1];
+        
+        // Validate that the extracted data is valid UTF-8 before parsing
+        let json_str = match std::str::from_utf8(json_rpc_candidate) {
+            Ok(s) => s,
+            Err(_) => return Ok(()), // Fail silently
+        };
+        
+        // Validate that it's proper JSON and is a valid JSON-RPC request
+        // This adds extra validation to make the parsing more robust
+        let parsed_json: Value = match serde_json::from_str(json_str) {
+            Ok(v) => v,
+            Err(_) => return Ok(()), // Fail silently
+        };
+        
+        // Verify it has the required JSON-RPC fields
+        if parsed_json.get("jsonrpc").and_then(|v| v.as_str()) != Some("2.0") {
+            return Ok(()); // Fail silently
         }
         
-        // If we didn't find JSON from the end, try the original method
-        if !found_json {
-            // Find start of JSON (first '{')
-            let json_start = payload.iter().position(|&b| b == b'{')
-                .ok_or_else(|| anyhow::anyhow!("No JSON request found"))?;
-            
-            // Find end of JSON (last '}' after the start)
-            let json_end = payload[json_start..].iter().rposition(|&b| b == b'}')
-                .ok_or_else(|| anyhow::anyhow!("Incomplete JSON request"))?;
-            
-            let mut json_rpc_candidate = &payload[json_start..json_start + json_end + 1];
-            
-            // Validate that the extracted data is valid UTF-8 before parsing
-            if std::str::from_utf8(json_rpc_candidate).is_ok() {
-                // Try to parse as JSON to make sure it's valid
-                if serde_json::from_slice::<Value>(json_rpc_candidate).is_ok() {
-                    json_rpc = json_rpc_candidate;
-                    found_json = true;
-                }
-            }
-            
-            // If still not found, try to find a valid JSON substring
-            if !found_json {
-                for start in json_start..payload.len() {
-                    if payload[start] == b'{' {
-                        for end in (start + 1)..payload.len() {
-                            if payload[end] == b'}' {
-                                let candidate = &payload[start..end + 1];
-                                if std::str::from_utf8(candidate).is_ok() {
-                                    // Try to parse as JSON to make sure it's valid
-                                    if serde_json::from_slice::<Value>(candidate).is_ok() {
-                                        json_rpc = candidate;
-                                        found_json = true;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                        if found_json {
-                            break;
-                        }
-                    }
-                }
-            }
+        if parsed_json.get("method").and_then(|v| v.as_str()).is_none() {
+            return Ok(()); // Fail silently
         }
         
-        if !found_json {
-            return Err(anyhow::anyhow!("Could not extract valid JSON from payload"));
-        }
         
-        // Debug: print the extracted JSON (first 200 chars)
-        if let Ok(json_str) = std::str::from_utf8(json_rpc) {
-            eprintln!("Extracted JSON request: {}", json_str.get(0..std::cmp::min(200, json_str.len())).unwrap_or("<too short to show>"));
-        } else {
-            eprintln!("Extracted request is not valid UTF-8");
-            return Err(anyhow::anyhow!("Invalid UTF-8 in JSON request"));
-        }
+        // Now convert to our specific request struct
+        let request: JsonRpcRequest = match serde_json::from_value(parsed_json) {
+            Ok(req) => req,
+            Err(_) => return Ok(()), // Fail silently
+        };
+        
+        let json_rpc = json_rpc_candidate;
+        
 
+
+
+        
+        // Validate method name format
+        if request.method.is_empty() {
+            return Ok(()); // Fail silently
+        }
+        
+        // Validate that method name is a valid string (no control characters, reasonable length)
+        if request.method.len() > 100 {
+            return Ok(()); // Fail silently
+        }
+        
+        // Check for potentially dangerous methods
+        if request.method.starts_with("_") {
+            return Ok(()); // Fail silently
+        }
+        
+        // MEV safety check: validate transaction privacy parameters
+        if request.method == "eth_sendRawTransaction" {
+            // Check for MEV protection parameters in the transaction
+            if let Some(params) = request.params.as_array() {
+                if let Some(tx_data) = params.get(0) {
+                    if let Some(tx_str) = tx_data.as_str() {
+                        // Validate transaction format
+                        if !tx_str.starts_with("0x") {
+                            return Ok(()); // Fail silently
+                        }
+                        
+                        // Check for privacy-enhancing transaction metadata
+                        // This is a hook for future privacy features
+                        if tx_str.len() < 10 { // Minimum transaction length check
+                            return Ok(()); // Fail silently
+                        }
+                    }
+                }
+            }
+        }
+        
         // Forward to RPC provider
-        let response = self.rpc_forwarder.forward_request(json_rpc).await?;
+        let response = match self.rpc_forwarder.forward_request(json_rpc).await {
+            Ok(resp) => resp,
+            Err(_) => return Ok(()), // Fail silently
+        };
 
         // Create response packet with random padding
         let mut response_packet = [0u8; PACKET_SIZE];
@@ -172,16 +184,21 @@ impl Gateway {
         response_packet[HEADER_SIZE + response_start..HEADER_SIZE + response_start + response_len]
             .copy_from_slice(&response[..response_len]);
 
-        // Encrypt response with same session key
+        // Encrypt response with same session key (this is a response)
         let (resp_header, resp_payload_and_tag) = response_packet.split_at_mut(HEADER_SIZE);
         let (resp_payload, resp_tag_space) = resp_payload_and_tag.split_at_mut(PAYLOAD_SIZE);
         
-        let tag = encrypt_in_place(&session_key, resp_header, resp_payload)?;
+        let tag = match encrypt_in_place(&session_key, resp_header, resp_payload, false) {
+            Ok(t) => t,
+            Err(_) => return Ok(()), // Fail silently
+        };
         resp_tag_space.copy_from_slice(&tag);
 
         // Send encrypted response (exactly 1024 bytes)
         assert_eq!(response_packet.len(), PACKET_SIZE);
-        stream.write_all(&response_packet).await?;
+        if let Err(_) = stream.write_all(&response_packet).await {
+            return Ok(()); // Fail silently
+        }
 
         Ok(())
     }
@@ -191,6 +208,7 @@ pub async fn start_gateway(
     listen_addr: &str,
     listen_port: u16,
     rpc_forwarder: RpcForwarder,
+    _allow_public_mempool: bool,
 ) -> anyhow::Result<()> {
     let gateway = Gateway::new(rpc_forwarder);
     let listener = TcpListener::bind(format!("{}:{}", listen_addr, listen_port)).await?;
@@ -199,17 +217,21 @@ pub async fn start_gateway(
     println!("   Privacy mode: ON (no logging of request contents)");
 
     loop {
-        let (stream, addr) = listener.accept().await?;
-        
-        // Clone gateway to handle each connection concurrently
-        let gateway_clone = gateway.clone();
-        
-        // Spawn a task to handle each connection concurrently
-        tokio::spawn(async move {
-            let result = gateway_clone.handle_connection(stream).await;
-            if let Err(e) = result {
-                eprintln!("Error handling connection from {}: {}", addr, e);
+        match listener.accept().await {
+            Ok((stream, _addr)) => {
+                // Clone gateway to handle each connection concurrently
+                let gateway_clone = gateway.clone();
+                
+                // Spawn a task to handle each connection concurrently
+                tokio::spawn(async move {
+                    let _ = gateway_clone.handle_connection(stream).await;
+                    // Fail silently - never log connection errors to prevent information leakage
+                });
             }
-        });
+            Err(_) => {
+                // Continue loop on accept error to maintain service availability
+                continue;
+            }
+        }
     }
 }

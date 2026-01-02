@@ -1,5 +1,7 @@
 {
   "listen_addr": "127.0.0.1",
   "listen_port": 9003,
-  "rpc_provider_url": "https://ethereum.publicnode.com"
+  "rpc_provider_url": "https://ethereum.publicnode.com",
+  "allow_public_mempool": false,
+  "mev_blocker_url": null
 }

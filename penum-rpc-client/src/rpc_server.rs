@@ -81,7 +81,21 @@ async fn handle_rpc_request(
     }
 
     // Serialize request to JSON
-    let request_json = serde_json::to_vec(&request).unwrap();
+    let request_json = match serde_json::to_vec(&request) {
+        Ok(json) => json,
+        Err(_) => {
+            let error_response = JsonRpcResponse {
+                jsonrpc: "2.0".to_string(),
+                result: None,
+                error: Some(JsonRpcError {
+                    code: -32603,
+                    message: "Internal error: Failed to serialize request".to_string(),
+                }),
+                id: request.id,
+            };
+            return Ok(warp::reply::json(&error_response));
+        }
+    };
 
     // Send through Penum
     match penum_client.send_rpc_request(&request_json).await {
@@ -157,9 +171,8 @@ async fn handle_rpc_request(
                 }
             }
         }
-        Err(e) => {
-            eprintln!("Error in Penum RPC client: {}", e);
-            // Fail silently - just return error to client
+        Err(_e) => {
+            // Fail silently - never log internal errors to prevent information leakage
             let error_response = JsonRpcResponse {
                 jsonrpc: "2.0".to_string(),
                 result: None,

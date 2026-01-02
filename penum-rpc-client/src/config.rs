@@ -19,9 +19,9 @@ pub struct RpcClientConfig {
 impl Default for RpcClientConfig {
     fn default() -> Self {
         Self {
-            entry_relay: "127.0.0.1:9001".parse().unwrap(),
-            middle_relay: "127.0.0.1:9002".parse().unwrap(),
-            gateway: "127.0.0.1:9003".parse().unwrap(),
+            entry_relay: "127.0.0.1:9001".parse().expect("Failed to parse default entry relay address"),
+            middle_relay: "127.0.0.1:9002".parse().expect("Failed to parse default middle relay address"),
+            gateway: "127.0.0.1:9003".parse().expect("Failed to parse default gateway address"),
             rpc_port: 8545,
             ui_port: 8546,
             protocol_version: 1,
